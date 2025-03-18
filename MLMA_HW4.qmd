@@ -1,0 +1,1001 @@
+---
+title: "Machine Learning and Applications Homework 4"
+author: "Abigail Lee"
+format: html
+jupyter: python3
+---
+
+# Exercise 1
+::: {}
+Your goal is to build a predictive model for income, using the techniques described so far in ISL, **including the tools described in Chapters 6 and 7**. 
+:::
+
+::: {}
+Demonstrate your knowledge and ability to clearly and professionally present the results of:
+:::
+
+
+1. OLS regression
+2. The validation set approach to assess prediction accuracy
+3. Cross validation to assess prediction accuracy
+4. Subset selection (best and forward/backward stepwise)
+5. Ridge regression
+6. Lasso regression
+7. Dimensionality reduction with PCA
+8. Nonlinear models and generalized additive models
+
+Report the results of your investigation. Include well-formatted, easy to read tables and/or
+figures that summarize the predictive accuracy based on different choices about tuning parameters and variable inclusion. In well-written paragraphs, briefly summarize the methods
+you use and explain your results.
+
+Your boss at your new data science job has assigned this to you for the purpose of assessing
+whether you will be on the ML team. Prepare your demonstration to that level of professionalism.
+
+## Importing libraries and dataset
+```{python}
+#| label: import-packages
+import numpy as np
+import pandas as pd
+from matplotlib.pyplot import subplots
+from sklearn.metrics import r2_score,mean_squared_error
+import matplotlib.pyplot as plt
+import statsmodels.api as sm
+from statsmodels.api import OLS
+import sklearn.model_selection as skm
+import sklearn.linear_model as skl
+from sklearn.preprocessing import StandardScaler
+from ISLP import load_data
+from ISLP.models import ModelSpec as MS
+from functools import partial
+from sklearn.pipeline import Pipeline
+from sklearn.model_selection import\
+    (train_test_split, cross_validate, KFold)
+from sklearn.decomposition import PCA
+from sklearn.cross_decomposition import PLSRegression
+from ISLP.models import \
+(Stepwise, sklearn_selected, summarize, sklearn_selection_path, sklearn_sm)
+from l0bnb import fit_path
+from IPython.display import display, Markdown
+import seaborn as sns
+```
+
+```{python}
+#| label: import-data
+# importing ACS 12 Data
+acs = pd.read_csv('ex1.csv')
+```
+
+## Exploring ACS data
+
+| Variable Name | Variable Type | Definition                                       | Values                                                   |
+|---------------|---------------|--------------------------------------------------|----------------------------------------------------------|
+| income        | num           | Annual income                                    | 0-450,000                                                |
+| hrs_work      | num           | Hours worked per week                            | 1-99                                                     |
+| race          | str           | Race                                             | other, white, asian, black                               |
+| age           | num           | Age, in years                                    | 16-94                                                    |
+| gender        | str           | Gender                                           | female, male                                             |
+| citizen       | str           | Whether the person is a US Citizen               | yes, no                                                  |
+| time_to_work  | num           | Travel time to work, in minutes                  | 1-163                                                    |
+| lang          | str           | Language spoken at home                          | other, english                                           |
+| married       | str           | Whether the person is married                    | yes, no                                                  |
+| disability    | str           | Whether the person is disabled                   | yes, no                                                  |
+| birth_qrtr    | str           | The quarter of the year that the person was born | jul thru sep, oct thru dec, april thru jun, jan thru mar |
+| edu           | str           | Education level                                  | hs or lower, college, grad                               |
+
+
+```{python}
+#| label: boxplot-categorical
+#| fig-cap: Annual Income by Categorical Variables
+# plotting annual income values by each categorical variable using boxplots
+def boxplot_fun(df):
+    # get names of categorical attributes
+    cat_names = df.select_dtypes(include=['object']).columns
+    for i in cat_names:
+        plt.figure(figsize = (8,8))
+        # plot boxplot
+        sns.boxplot(x=df[i],y=acs['income'])
+        plt.title(f'Boxplot of Income by {i.capitalize()}')
+        plt.xlabel(i.capitalize())
+        plt.ylabel('Annual Income')
+        plt.show()
+
+boxplot_fun(acs.drop('income', axis = 1))
+
+```
+
+
+```{python}
+#| label: acs-pariplot
+#| fig-cap: Annual Income by Numeric Variables
+closeup = sns.pairplot(acs, x_vars = ['age', 'hrs_work', 'time_to_work'],
+y_vars = ['income'])
+
+```
+
+For the first, simplest OLS regression, I want to explore the relationship between gender, hours worked, and income. 
+
+Before going any further, however, I will transform the categorical features in this dataset to dummy variables and convert the outcome `income` into income in the $1000s for easier interpretation of model results. Additionally, I included functions to create and display predictive accuracy summary tables for each model. 
+
+```{python}
+#| label: predictive-metrics-functions
+
+# Mean-squared error
+def mse_fun(X, y, model):
+    y_pred = model.predict(X)
+    mse = np.mean((y - y_pred)**2)
+    return mse
+
+# Square root of MSE
+def rmse_fun(mse):
+    rmse = mse**0.5
+    return rmse
+
+# using r2 score function from sklearn
+def rsquare(X, y, model):
+    y_pred = model.predict(X)
+    r2 = r2_score(y, y_pred)
+    return r2
+
+# creating a dataframe with all the predictive metrics
+def acc_pred_table(model, model_name, X, y):
+    
+    r2 = rsquare(X, y, model)
+    mse = mse_fun(X, y, model)
+    rmse = rmse_fun(mse)
+    acc_table_wide = pd.DataFrame({'Model':[model_name], 'MSE':[mse], 'RMSE':[rmse],
+     'R^2':[r2]})
+     # long and wide format to combine later
+    acc_table_wide = acc_table_wide.set_index('Model')
+    acc_table_long = acc_table_wide.melt(var_name = 'Metric',
+    value_name = 'Value')
+    return acc_table_wide, acc_table_long
+
+# transforming to markdown format for QMD file
+def markdown_format(summary_table, title, include_ind = False):
+    markdown = f"::: {{.tbl-cap}}\n**{title}**\n:::\n\n"
+    if include_ind == False:
+        display(Markdown(markdown + summary_table.to_markdown(index = False)))
+    else:
+        display(Markdown(markdown + summary_table.to_markdown())) 
+```
+
+
+## Ordinary Least Squares Regression and Predictive Accuracy
+
+### Simple OLS Model
+```{python}
+#| label: clean-acs-data
+# get dummy variables for categorical features
+clean_acs = pd.get_dummies(acs, columns = acs.columns.drop(['income', 'age', 'hrs_work', 'time_to_work']), drop_first = True, dtype = float)
+# renaming variables
+clean_acs = clean_acs.rename(columns={
+    'gender_male':'male',
+    'citizen_yes':'citizen',
+    'married_yes':'married',
+    'disability_yes':'disability',
+    'edu_grad': 'grad',
+    'edu_hs or lower':'hs'
+})
+# dividing annual income by $1000
+clean_acs['income'] = clean_acs['income']/1000
+# setting outcome variable
+y = clean_acs['income']
+```
+
+```{python}
+#| label: initial-ols
+# fitting predictors of male gender and hours of work per week
+X = MS(['male', 'hrs_work']).fit_transform(clean_acs)
+# regressing annual income on these predictors
+ols_model = sm.OLS(y, X)
+# fitting model
+ols_fit = ols_model.fit()
+# coefficients
+ols_coef_summary = summarize(ols_fit)
+
+```
+
+```{python}
+#| label: OLS-summary
+#| echo: false
+
+ols_sum_w, ols_sum_l = acc_pred_table(ols_fit, "OLS regression", X, y)
+```
+
+OLS regression is a well-established form of supervised learning that models the relationship between a dependent variable and one or more independent variables. OLS regression takes the form of a linear equation, where the y-intercept represents the baseline outcome and a slope coefficient is the change in the outcome associated with a one-unit increase in a given dependent variable when all other predictors are held constant. OLS achieves the best fit to the underlying relationship between features by minimizing the sum of squared errors (the distance between observed and fitted values) with optimal values for the intercept and slope coefficients.  
+```{python}
+#| label: coef-summary-table
+#| echo: false
+print(markdown_format(ols_coef_summary, "OLS Coefficients", include_ind = True))
+```
+
+From the results of this first OLS model, there seems to be a significant relationship between gender, hours worked per week, and annual income. Specifically, the y-intercept tells us that for women working 0 hours per week, the average annual earnings are $-19,200. This is a negative value and thus not practically interpretable, however the coefficients for `male` and `hrs_work` tell us about the variation in annual income that can be explained by each feature individually. Between two people who work the same amount each week, the man will make $17,900 more on average compared to the woman. A person who works one more hour per week will make $1395.4 more annually than another person of the same gender. Together, gender and hours worked per week explain approximately 14% of the variance in annual income.  
+
+```{python}
+#| label: pred-summary-table
+#| echo: false
+markdown_format(ols_sum_l, 'OLS Predictive Accuracy Summary')
+```
+
+The average squared difference between the model's predictions of income and the actual values of income in the `acs12` dataset is $2.9 million. In other words, the model's predictions of annual income deviate from the actual values by approximately $54,000 on average. However, this may not be a honest representation of the model's predictive accuracy as the model was developed specifically to optimize results for the data it was fitted on. 
+
+The coefficients and weights have been altered to reflect any trends or variation in the training dataset, including those attributed to random noise not actually relevant to the underlying relationship between the outcome and predictors. To obtain a more accurate picture of this model's predictive performance, we would thus need to apply it to new, unseen data, and compare the differences between the model's fitted values and the observed ones.  
+
+### Validation Set Approach
+```{python}
+# splitting data into training and test sets
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size = 0.3, random_state = 42)
+# fitting OLS model again, on training subset
+model = sm.OLS(y_train, X_train)
+results = model.fit()
+vset_coef_summary = summarize(results)
+vset_sum_w, vset_sum_l = acc_pred_table(results, "Validation Set OLS", X_test, y_test)
+```
+
+```{python}
+#| label: vset-coef-summary-table
+#| echo: false
+markdown_format(vset_coef_summary, "OLS Coefficients on Training Subset", include_ind = True)
+```
+
+The validation set approach fits a model on only a subset of the data and uses the other subset to estimate model performance on unseen observations. Trained again on 70% of the data, the OLS model still indicates a significant positive relationship between male gender, work hours and annual income, although the magnitude of coefficients has changed slightly. 
+```{python}
+#| label: vset-pred-table
+#| echo: false
+markdown_format(vset_sum_l, "OLS Model Accuracy on Unseen Data")
+```
+
+The mean-squared error on unseen data is $3.1 million, meaning that on average, the predicted annual income value for a new observation deviates from the actual value by around $55,890, a larger gap than what was found when predicting income for already seen data. Moreover, the model can only explain 5% of variance in annual income in unseen observations, compared to 14% for the data it was fitted on. This may suggest that the model may not be a good fit and that the variance in the outcome attributed to gender and hours worked originally may have been a result of overfitting, or random noise the model caught in the training data. 
+
+### Cross-validation Approach
+
+The validation set approach only tells us about how well the model performs when predicting annual income in this specific set of observations. The resulting test error score at one instance is highly variable and may not give the best representation of the model's predictive performance on average. Cross-validation helps address this concern for variance by averaging test error over multiple random splits of training and test data. In k-fold cross-validation, we split the initial dataset into k folds, where k-1 folds are used to train a model and results are validated using the remaining fold. The final estimate of test error is obtained by repeating this process k times and aggregating the test error at each fold. 
+```{python}
+# setting error value for cross validation
+cv_error = np.zeros(5)
+# transforming sm.OLS to sklearn model to use in built-in cross validation function
+acs_mod = sklearn_sm(sm.OLS)
+# 10-fold cross-validation approach
+# shuffles data before splitting
+cv = KFold(n_splits = 10, shuffle = True, random_state = 0)
+# repeating sm.OLS function with income and X variables using the 10-fold cross-validator
+acs_cv = cross_validate(acs_mod, X, y, cv = cv, scoring=['r2', 'neg_mean_squared_error'])
+# includes MSE and R2 as scoring metrics
+
+
+```
+
+```{python}
+# similar predictive accuracy summary table but for cross-validated results
+def cv_summary_table(cv, model_name):
+    # aggregating r-squared over k folds
+    mean_r2 = np.mean(cv['test_r2'])
+    # negative mean of negative MSE over k folds
+    cv_mse = -np.mean(cv['test_neg_mean_squared_error'])
+    # square root of MSE
+    cv_rmse = cv_mse**0.5
+    # combining values into dataframe
+    cv_sum_w = pd.DataFrame({'Model':[model_name],
+    'MSE':[cv_mse], 'R^2':[mean_r2], 'RMSE':[cv_rmse]})
+    # includes both long and wide dataframes
+    cv_sum_w = cv_sum_w.set_index('Model')
+    cv_sum_l = cv_sum_w.melt(var_name = 'Metric', value_name = 'Value')
+    # returns both dataframes
+    return cv_sum_w, cv_sum_l
+
+ols_cv_w, ols_cv_l = cv_summary_table(acs_cv, "Cross-Validated OLS")
+
+```
+
+```{python}
+#| label: cv-table
+#| echo: false
+markdown_format(ols_cv_l, "Cross-Validated Results")
+```
+
+The aggregated test error of this model over 10 folds is $2.932 million, which is lower than what was found with the validation set approach. As mentioned, test estimates obtained for a single set of observations is highly volatile, as the mean r-squared value aggregated through cross-validation is 12%, which is also significantly closer to the original r-squared of 14%. Based on these cross-validated results, it seems like this model based on gender and hours worked can predict annual income for new observations with an average error margin of $54,200. 
+
+## Model Regularization Methods
+
+Tools like validation or cross-validation strengthen the statistical power of OLS model estimates but do not actually improve the performance of the model itself. The OLS model, while simple, can become significantly more powerful as a predictive tool through optimal adjustments in variable coefficients as well as in the underlying data itself. 
+
+### Subset Selection
+Intuitively, one may think that simply including all the information available would result in the model with the lowest prediction error. Yet, this is often not the case as, especially when the added coefficients are not all important to the outcome variable of interest, this extra model complexity only weakens its performance on new data because predictions reflect random noise rather than meaningful patterns in the outcome. On the other hand, it is rarely the case that one or two variables alone can account for all the variation in an outcome, so the overall error of predictions would be high on both seen and unseen data. Subset selection helps acheive a balance between model complexity and predictive performance by comparing model performance using different combinations of predictors. 
+
+When comparing the contributions of different subsets of predictors for model performance, it is important that the subset selection process does not see the subset of data set aside for final evaluation as this would bias the final estimates of test error for the model identified by subset selection.
+
+```{python}
+# all predictor variables
+X_og = MS(clean_acs.columns.drop('income')).fit(clean_acs)
+X = X_og.fit_transform(clean_acs)
+# removing intercept as this is not included in l0bnb model
+X = X.drop('intercept', axis =1)
+# splitting into training and test sets to validate models obtained through subset selection
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size = 0.3, random_state =42)
+# splitting training set again to reach a model through best/stepwise subset selection
+vs_x_train, vs_x_test, vs_y_train, vs_y_test = train_test_split(X_train, y_train, test_size = 0.3, random_state = 0)
+
+```
+
+#### Best Subset Selection
+The most exhaustive way to reach the optimal set of predictors is best subset selection, where we iterate through all possible combinations of predictors at each size up to the total amount of predictors, and compare the best model at each step using cross-validation or estimates of test error like AIC, adjusted R-squared, or BIC, to result in the overall best model possible. This is a relatively intuitive approach, but is significantly and perhaps unnecessarally computationally expensive for large p of predictors. 
+
+```{python}
+# turning training and test sets into arrays
+train_array = np.asarray(vs_x_train)
+test_array = np.asarray(vs_x_test)
+y_train_array = np.asarray(vs_y_train)
+y_test_array = np.asarray(vs_y_test)
+# performing best subset selection on training arrays for models with 1 to 16 coefficients in total
+path = fit_path(train_array, y_train_array, max_nonzeros = train_array.shape[1])
+
+```
+
+```{python}
+# my expansion of the l0bnb code is based on the code documentation for l0bnb and the fit_path() function included in the references 
+
+MSE_dict = {}
+# for each step specified by fit_path() call, obtain list of variable coefficients and y-intercept
+for i in range(0, len(path)):
+    coef = path[i]['B']
+    intercept = path[i]['B0']
+    nonzero = np.nonzero(coef)[0].tolist()
+    # find the column names for the coefficients at each step
+    X_features = X.iloc[:, nonzero].columns.tolist()
+    # using the specified coefficient and intercept values to predict income for the unseen test array
+    y_estimate = np.dot(test_array, coef) + intercept
+    # calculating MSE between predicted and observed values
+    MSE_val = np.mean((y_test_array - y_estimate)**2)
+    # appending MSE and variable combination to aformentioned dictionary
+    MSE_dict[str(X_features)]=MSE_val
+print(MSE_dict)
+
+```
+
+```{python}
+# finds dictionary key with lowest MSE
+min_key = min(MSE_dict, key = MSE_dict.get)
+# find corresponding value
+min_val = MSE_dict[min_key]
+# combination of key and entry with lowest MSE
+min_entry = (min_key, min_val)
+print(min_entry)
+
+```
+
+```{python}
+# testing regression model with the best subset of coefficients specified by best subset selection
+best_features = ['hrs_work', 'age', 'male', 'grad', 'hs']
+# subsetting original set of predictors for this best subset in both training and test data
+best_X_train = MS(best_features).fit_transform(X_train)
+best_X_test = MS(best_features).fit_transform(X_test)
+# fitting OLS model on training data
+best_ols = sm.OLS(y_train, best_X_train)
+best_model = best_ols.fit()
+# getting predictive accuracy metrics when used on unseen data
+best_sum_w, best_sum_l  = acc_pred_table(best_model, "Best Subset Selection OLS", best_X_test, y_test)
+
+
+
+```
+
+```{python}
+
+markdown_format(best_sum_l, "Best Subset Selection OLS Results")
+
+```
+
+Using the package `l0bnb`'s variation of best subset selection, optimal results are produced when income is regressed on work hours, age, male gender, and education level. The validation mean-squared error for this model is 2.617 million, which represents a significant drop from the error achieved in the first OLS model without subset selection.  
+
+As previously mentioned, performing best subset selection is computationally expensive as we need to fit overall 2^p models for p number of predictors. Stepwise selection methods such as forward and backward selection offer far more efficient but comparably performing alternatives to best subset selection. In essence, forward stepwise selection works by adding a variable at each step that optimizes model results, while backward stepwise selection finds the most optimal model by removing a variable at each step that optimizes model results. Importantly, neither approach is as comprehensive as best subset selection because the overall most accurate model may not be the same as the most accurate model at each step, which is what informs stepwise selection methods. However, with stepwise selection, we only need to explore p(p+1)/2 combinations compared to 2^p for best subset selection, and forward selection even allows us to optimize the model when p > n. 
+
+#### Forward Selection
+When selecting an optimal feature subset with forward selection, we first identify the best performing model at each step as the one with the lowest RSS or highest r-squared. When comparing models with different amounts of predictors however, we must use estimates of test error, or the validated/cross-validated test error as both RSS and r-squared values are naturally improved with larger p. 
+
+```{python}
+# taken from Chapter 6 lab
+# negative Cp as a scoring metric (The Cp with the lowest absolute value is preferred)
+def nCp(sigma2, estimator, X, Y):
+    n, p = X.shape
+    
+    Yhat = estimator.predict(X)
+    # residual sum of squares
+    RSS = np.sum((Y-Yhat)**2)
+    return -(RSS + 2 * p * sigma2)/n
+
+
+X_cp = X_og.transform(clean_acs)
+# estimate of error variance
+sigma2 = OLS(y_train, X_train).fit().scale
+neg_Cp = partial(nCp, sigma2)
+# specifying forward selection strategy to continue until reaches 16 coefficients
+strategy = Stepwise.first_peak(X_og,
+direction = 'forward', max_terms = len(X_og.terms))
+# conducting forward selection using sm.OLS function and negative Cp to score
+acs_Cp = sklearn_selected(
+    OLS, strategy, scoring = neg_Cp
+)
+# fitting forward selection on training data
+acs_Cp.fit(X_train, y_train)
+# returning list of optimal variables
+acs_Cp.selected_state_
+```
+
+When Cp, or AIC, an estimate of test error that penalizes larger values of p, is used to compare the predictive power of models, forward selection identifies age, disability, work hours, time to work, gender, and education level as the optimal subset of features for predicting annual income. This is a different result to the best subset selection, as forward selection is a greedy approach. 
+When using negative Cp as the scoring, backward selection results in the same subset of variables.
+
+```{python}
+# repeating process but going backwards
+strategy = Stepwise.first_peak(X_og,
+direction = 'backwards', max_terms = len(X_og.terms))
+acs_Cp = sklearn_selected(
+    OLS, strategy, scoring = neg_Cp
+)
+acs_Cp.fit(X_train, y_train)
+acs_Cp.selected_state_
+
+```
+```{python}
+# testing model suggested by stepwise selection on unseen data
+forward_X = ['age', 'disability', 'grad', 'hrs_work', 'hs', 'male', 'time_to_work']
+forward_X_train = MS(forward_X).fit_transform(X_train)
+forward_X_test =MS(forward_X).fit_transform(X_test)
+forward_ols = sm.OLS(y_train, forward_X_train)
+forward_model = forward_ols.fit()
+forward_sum_w, forward_sum_l = acc_pred_table(forward_model, "OLS Forward Selection", forward_X_test, y_test)
+
+```
+
+```{python}
+
+markdown_format(forward_sum_l, 'Forward Selection OLS Results')
+
+```
+
+The validated error achieved with this subset is 2.582 million, which is slightly better than the predictions obtained with the model selected through best subset selection.
+
+Still, because Cp is not a perfect measure of test error, it may be useful to perform another forward/backward selection through cross-validation. 
+
+```{python}
+# using cross-validation to find the best number of coefficients to use in the model
+# only exposing model to training data for later validation
+strategy = Stepwise.fixed_steps(X_og, len(X_og.terms), direction = 'forward')
+full_path = sklearn_selection_path(OLS, strategy)
+# specifying k-fold cross validator
+kfold = skm.KFold(5, random_state=0, shuffle=True)
+y_train = np.asarray(y_train)
+# finding fitted values for each fold
+Yhat_cv = skm.cross_val_predict(full_path, X_train, y_train, cv=kfold)
+cv_mse = []
+
+# taken from Chapter 6 Lab
+# computing errors for each fold and aggregating the MSE
+for train_idx, test_idx in kfold.split(y_train):
+    errors = (Yhat_cv[test_idx]-y_train[test_idx, None])**2
+    cv_mse.append(errors.mean(0))
+cv_mse = np.array(cv_mse).T
+# plotting cross-validated MSE by size of coefficient subset
+mse_fig, ax = subplots(figsize = (8,8))
+n_steps = cv_mse.shape[0]
+ax.errorbar(np.arange(n_steps), cv_mse.mean(1), cv_mse.std(1)/np.sqrt(5),c='r', label = 'CV')
+
+```
+
+Using cross-validation, we seem to get the best model outcomes when p = 5. Going through each combination of 5 features, it seems like
+
+```{python}
+import itertools
+# out of all combinations of five variables, find subset that results in best predictive outcomes
+
+# code modified from previous two homework submissions
+def best_five():
+    mse_scores = {}
+    # iterate over each combination of 5 predictors from the total set of predictors
+    for combo in itertools.combinations(X.columns, 5):
+        # fit OLS model of income by the specific combination
+        X_list = list(combo)
+        X_features = MS(X_list).fit_transform(X_train)
+        vs_X_train, vs_X_test, vs_y_train, vs_y_test = train_test_split(X_features, y_train, random_state = 0, test_size = 0.3)
+        model = sm.OLS(vs_y_train, vs_X_train)
+        model_fit = model.fit()
+        y_pred = model_fit.predict(vs_X_test)
+        # find mean squared error of fitted to observed values
+        mse = np.mean((vs_y_test-y_pred)**2)
+        # save combination of variables and MSE to the dictionary above
+        mse_scores[str(combo)] = mse
+        
+        # return dictionary of MSE scores for each combination
+    return mse_scores
+
+mse_scores = best_five()
+
+
+
+```
+
+```{python}
+# find key and value of smallest MSE in the dictionairy
+min_key = min(mse_scores, key = mse_scores.get)
+min_val = mse_scores[min_key]
+min_entry = (min_key, min_val)
+min_entry
+ 
+```
+
+The optimal combination of five variables is work hours, age, male gender, marital status, and whether one has education greater than high school. This subset of variables can predict annual income for new observations with a $52,300 error margin on average, with a validated mean-squared error of 2.7 million, which is worse than the results achieved with the Cp method. 
+
+```{python}
+# testing this combination on validation set
+five_features = ['hrs_work', 'age', 'male', 'married', 'hs']
+five_X_train = MS(five_features).fit_transform(X_train)
+five_X_test = MS(five_features).fit_transform(X_test)
+five_ols = sm.OLS(y_train, five_X_train)
+five_fit = five_ols.fit()
+five_sum_w, five_sum_l = acc_pred_table(five_fit, "P=5 Subset OLS", five_X_test, y_test)
+
+
+```
+
+```{python}
+
+markdown_format(five_sum_l, "Five Variable Subset OLS Results")
+
+```
+
+
+### Ridge Regression
+Generally, the goal of regularization methods are to improve the predictive power of a model on new data. Both ridge and lasso regression methods do this by optimizing the trade-off between model bias and model complexity. That is, where regular least-squares regression aims to minimize the sum of squared residuals (the bias in a model fit compared to observations), lasso and ridge regressions seek to minimize both bias as well as model complexity through the tuning parameter lambda. Steeper slopes means that predictions are more sensitive to slight changes in the predictor variables, so the lasso and ridge regression equations work by penalizing slopes of large magnitude by multiplying either the square or absolute value of slope by a constant, lambda. That means that the optimal model resulting in the lowest MSE will have slopes of lower magnitude compared to regular least-squares regression. This penalty will reduce the sensitivity of a model's coefficients while simultaneously increasing model bias. The best model is thus found with the tuning parameter lambda that results in a significant decrease in variance with only a small increase of bias. 
+
+The goals and logic behind ridge and lasso regression are very similar, only that lasso regression uses the absolute value of the slope and can thus equal zero for a given variable, if it is deemed unimportant to predicting the outcome at a given lambda value. Thus, lasso regression can be a form of variable selection while ridge regression (the square slope) simply shrinks the magnitude of each coefficient proportional to their influence on the outcome.
+
+When running ridge or lasso regression, it is important to first standardize variables, or else the model will penalize variables at a larger scale even if they are of the same importance as those at a smaller scale. 
+```{python}
+# using cross-validation to find optimal lambda parameter for ridge regression
+# setting 10-fold cross validator
+K = 10
+kfold = skm.KFold(K, random_state = 0, shuffle = True)
+# array of potential parameter values standardized by the standard deviation of annual income
+lambdas = 10**np.linspace(8, -2, 100) / clean_acs['income'].std()
+# setting grid of lambda tuning parameters
+para_grid = {'ridge__alpha':lambdas}
+# setting ridge regression call
+ridge = skl.ElasticNet(alpha = lambdas[9], l1_ratio = 0)
+# scaling step to call in pipeline
+scaler = StandardScaler(with_mean = True, with_std = True)
+# ridge regression pipeline to use in cross-validation
+pipe = Pipeline(steps=[('scaler',scaler), ('ridge', ridge)])
+# cross-validating ridge regression lambda parameter tuning across 10 folds over the grid of possible lambda values
+grid = skm.GridSearchCV(pipe, para_grid, cv = kfold, scoring = 'neg_mean_squared_error')
+# fitting on training data
+grid.fit(X_train, y_train)
+# finding the optimal lambda value
+best_param = grid.best_params_['ridge__alpha']
+```
+
+```{python}
+# using the previously specified lambda value to fit another ridge regression model
+ridge_best = skl.ElasticNet(alpha = best_param, l1_ratio = 0)
+pipe_ridge = Pipeline(steps=[('scaler', scaler), ('ridge', ridge_best)])
+# scaling and fitting training data using optimal lambda value
+result_ridge = pipe_ridge.fit(X_train, y_train)
+# validating results on unseen data
+ridge_sum_w, ridge_sum_l = acc_pred_table(result_ridge, "Ridge Regression Validation Results", X_test, y_test)
+```
+
+```{python}
+
+markdown_format(ridge_sum_l, "Ridge Regression Validation Summary")
+
+```
+
+The resulting validated error using ridge regression is around 2.622 million, which is better than the original OLS model however not the best when compared to that achieved with forward selection methods. If the actual set of variables important to outcomes in income is small compared to the total number of variables, then lasso regression may find a better balance between model complexity and bias than ridge regression as lasso regression allows for variable selection. Thus, slight variations are made to perform lasso regression. 
+
+```{python}
+# completing same steps but for lasso regression
+para_grid_2 = {'lasso__alpha':lambdas}
+# main difference is that l1_ratio is set as 1 and not 0
+lasso = skl.ElasticNet(alpha=lambdas[9], l1_ratio=1)
+# lasso pipeline
+pipe_l = Pipeline(steps=[('scaler', scaler), ('lasso', lasso)])
+grid_l = skm.GridSearchCV(pipe_l, para_grid_2, cv=kfold, scoring = 'neg_mean_squared_error')
+grid_l.fit(X_train, y_train)
+# finding best lambda for lasso regression
+best_lambda_l = grid_l.best_params_['lasso__alpha']
+# using optimal lambda to fit and validate lasso regression model
+lasso_best = skl.ElasticNet(alpha = best_lambda_l, l1_ratio = 1)
+pipe_lasso = Pipeline(steps=[('scaler', scaler), ('lasso', lasso_best)])
+result_lasso = pipe_lasso.fit(X_train, y_train)
+lasso_sum_w, lasso_sum_l = acc_pred_table(result_lasso, 'Lasso Regression Results', X_test, y_test)
+markdown_format(lasso_sum_l, "Lasso Regression Results")
+
+
+```
+
+The test MSE acheiveved with the lasso regression model obtained through hyperparameter cross-validation has a test error of 2.64 million, which represents an improvement over ridge regression. The optimal lambda value only removes one variable from model evaluation, `birth_qrtr_oct thru dec`, and most of the birth quarter categories are unimportant to model predictions. 
+
+```{python}
+# finding which coefficients are kept by the lasso regression model
+pipe_lasso.named_steps['lasso'].coef_
+
+```
+
+### Principal Component Analysis (PCA)/Principal Component Regression (PCR)
+Both subset selection and ridge/lasso regression strengthen the predictive ability of OLS models by modifying the coefficients, either the number of coefficients or the magnitude of coefficients. Dimensionality reduction helps the generalizability of a model by transforming the underlying data itself, without the need to exclude any variables. Instead, dimensionality reduction methods such as principal component analysis (PCA) produce simple and accurate models by regressing the outcome on a principal component that compresses the important variation in the p dimensions included in the original dataset. Like tuning the lambda parameters for lasso or ridge regression, cross-validation can be used to find the optimal number of components for the model. As a general rule, PCR works the best when patterns in the dataset are sufficiently explained by only a few components, or else there won't be much improvement compared to least-squares regression on the p features. 
+
+```{python}
+# using cross-validation to find best number of components for PCA
+pca = PCA(n_components = 2)
+linreg = skl.LinearRegression()
+# pipeline that first standardizes variables, performs dimensionality reduction and then fits linear regression model
+pca_pipe = Pipeline(steps=[('scaler', scaler), ('pca', pca), ('linreg', linreg)])
+# fitting on training data
+pca_pipe.fit(X_train, y_train)
+# trying entire possible range of principal components
+param_grid = {'pca__n_components': range(1,16)}
+# performing grid CV using previous 10-fold cross-validator
+grid = skm.GridSearchCV(pca_pipe, param_grid, cv=kfold, scoring = 'neg_mean_squared_error')
+grid.fit(X_train, y_train)
+
+```
+
+```{python}
+# MSE by number of components
+pcr_fig, ax = subplots(figsize = (8,8))
+n_comp = param_grid['pca__n_components']
+ax.errorbar(n_comp, -grid.cv_results_['mean_test_score'], grid.cv_results_['std_test_score']/np.sqrt(K))
+
+```
+
+The lowest cross validated MSE is achieved with 12 principal components, but the MSE with 6 principal components is within one standard error of the minimum, and because this is a simpler model, this seems like the most optimal model. 
+
+```{python}
+# using 6 components for optimal model results
+pca_5 = PCA(n_components = 6)
+pipe_pca_5 = Pipeline(steps=[('scaler', scaler), ('pca', pca_5), ('linreg', linreg)])
+result_pca_5 = pipe_pca_5.fit(X_train, y_train)
+# applying model to unseen data and returning predictive results
+pcr_sum_w, pcr_sum_l = acc_pred_table(result_pca_5, "PCR Results", X_test, y_test)
+markdown_format(pcr_sum_l, "PCR Results")
+```
+
+
+The mean squared-error achieved with the model with 6 principal components is 2.551 million, which is one of the lowest so far. Because we do not exclude any variables from the model fitting, instead taking the most important patterns in the total predictor sets and using this for prediction, the explanatory power of this model may thus be improved. 
+
+## Non-linear transformations
+Finally, it may be the case that the OLS regression simply does not capture the relationship between OLS and important predictors such as age, gender, or hours worked because the underlying relationship is not linear, or varies across the range of observations, two aspects which are strictly assumed in least-squares regression. Nonlinear transformations like polynomial regression, stepwise, natural and smooth splines offer ways to improve the model fit for non-linear relationships, again with considerations for the bias-variance trade-off.
+
+```{python}
+# importing libraries from Chapter 7
+import numpy as np, pandas as pd
+from matplotlib.pyplot import subplots
+import statsmodels.api as sm
+from ISLP import load_data
+from ISLP.models import (summarize,
+                         poly,
+                         ModelSpec as MS)
+from statsmodels.stats.anova import anova_lm
+
+from pygam import (s as s_gam,
+                   l as l_gam,
+                   f as f_gam,
+                   LinearGAM,
+                   LogisticGAM)
+
+from ISLP.transforms import (BSpline,
+                             NaturalSpline)
+from ISLP.models import bs, ns
+from ISLP.pygam import (approx_lam,
+                        degrees_of_freedom,
+                        plot as plot_gam,
+                        anova as anova_gam)
+
+```
+
+These non-linear transformations can be freely combined together to create a multivariate regression model, or a generalized additative model that informs us about the partial dependence of the outcome on each transformation of each predictor. 
+
+### Polynomial Regression
+Polynomial regression is the conventional way to account for non-linear relationships in a least-squares regression model. For the first polynomial regression, I want to explore whether the model fit of income to hours worked is improved by including higher-degree coefficients.  
+```{python}
+# trying a range of higher-degree polynomial regression for the variable hours worked per week
+hw_models = [MS([poly('hrs_work',degree=d)]) for d in range(1,6)]
+xs = [model.fit_transform(X_train) for model in hw_models]
+# comparing the results and fit of each higher-degree model
+anova_lm(*[sm.OLS(y_train, X_trained).fit() for X_trained in xs])
+
+```
+
+The biggest improvement in model accuracy occurs when we include a third-degree polynomial. This model will be evaluated for its predictive accuracy on the test set. 
+
+```{python}
+# the biggest improvement is seen when using a third-degree polynomial
+poly3 = MS([poly('hrs_work', degree=3)]).fit_transform(clean_acs)
+# fitting a third-degree polynomial regression 
+poly3_ols = sm.OLS(y, poly3)
+poly3_fit = poly3_ols.fit()
+
+```
+
+
+
+```{python}
+
+# function to create an array of 100 evenly spaced values across the range of a variable
+def pred_grid(X, name):
+    grid = np.linspace(X.min(), X.max(), 100)
+    df = pd.DataFrame({name:grid})
+    return df
+
+# plotting non-linear transformations
+# taken from Chapter 7 lab
+def plot_nl_fit(df, basis, title, x, xlab):
+    # performing base transformations for predictor variable
+    X = basis.transform(clean_acs)
+    Xnew = basis.transform(df)
+    # fitting OLS model using transformation
+    M = sm.OLS(y, X).fit()
+    # getting predictions for 100 new values based on fitted model
+    preds = M.get_prediction(Xnew)
+    # returning confidence interval for predictions
+    bands = preds.conf_int(alpha=0.05)
+    fig, ax = subplots(figsize=(8,8))
+    # plotting bivariate plot
+    ax.scatter(x,
+               y,
+               facecolor='gray',
+               alpha=0.5)
+               # plots regression line and error margins
+    for val, ls in zip([preds.predicted_mean,
+                      bands[:,0],
+                      bands[:,1]],
+                     ['b','r--','r--']):
+        ax.plot(df.values, val, ls, linewidth=3)
+        # including specified titles for plot and x variables
+    ax.set_title(title, fontsize=20)
+    ax.set_xlabel(xlab, fontsize=20)
+    ax.set_ylabel('Annual Income', fontsize=20);
+    return ax
+
+```
+
+```{python}
+# fitting a regression model and plotting the third-degree polynomial relationship between hours worked and annual income
+poly3 = MS([poly('hrs_work', degree=3)]).fit(clean_acs)
+hw_grid = pred_grid(clean_acs.hrs_work, 'hrs_work')
+plot_nl_fit(hw_grid, poly3, "3-Degree Polynomial", clean_acs['hrs_work'], 'Hours worked')
+
+```
+
+```{python}
+# aggregating MSE of the third-degree polynomial model 
+cv_err = np.zeros(5)
+hrswork = np.array(clean_acs.hrs_work)
+ols = sklearn_sm(sm.OLS)
+Xpower = np.power.outer(hrswork, np.arange(4))
+m_cv = cross_validate(ols, Xpower, y, cv=cv, scoring=['r2', 'neg_mean_squared_error'])
+poly_cv_w, poly_cv_l = cv_summary_table(m_cv, "Polynomial Regression Cross-Validated Results")
+markdown_format(poly_cv_l, "Polynomial Regression CV")
+```
+
+The cross-validated mean-squared error for the third-degree polynomial regression of income by hours worked is 2.953 million, which is around the same that was achieved with the first OLS regression of income by gender and hours worked. 
+
+### Step Functions
+The step function predicts outcomes based on the mean outcome value at each specified step, uniform or nonuniform, in the range of the independent variable. The cross-validated error for the regression with the step function basis is 3 million, which is one of the worst performing models so far. This makes sense as model bias will be relatively high with such aggregated predictions. 
+
+```{python}
+# splitting the hours worked variable into 4 equal quarters
+X_step = pd.qcut(clean_acs.hrs_work, 4)
+# aggregating MSE for the step function model
+step_cv = cross_validate(ols, pd.get_dummies(X_step),y, cv=cv, scoring=['r2', 'neg_mean_squared_error'])
+step_cv_w, step_cv_l = cv_summary_table(step_cv, "Step Function CV Regression")
+markdown_format(step_cv_l, "Step Function CV")
+```
+
+## Splines
+```{python}
+# default spline option
+bs_ = BSpline(df=6).fit(clean_acs.hrs_work)
+bs_work = bs_.transform(clean_acs.hrs_work)
+bs_work = MS([bs('hrs_work',
+                df=6,
+                name='bs(hours worked)')])
+Xbs = bs_work.fit_transform(clean_acs)
+# using splines to create different cubic lines at each knot
+# cross-validated error for the spline model
+bs_cv = cross_validate(ols, Xbs, y, cv=cv, scoring=['r2', 'neg_mean_squared_error'])
+bs_cv_w, bs_cv_l = cv_summary_table(bs_cv, "Base Splines Cross-Validated Results")
+markdown_format(bs_cv_l, "Base Splines CV")
+```
+
+Using splines with three knots for hours worked results in a cross-validated error fo 2.961 million, around the same achieved with the three-degree polynomial regression. 
+
+```{python}
+for i in range(3,10):
+# comparing the performance of spline function with different degrees of freedom - for more complexity or smoothness
+    ns_work = MS([ns('hrs_work',df=i)]).fit(clean_acs)
+    m_ns = sm.OLS(y, ns_work.transform(clean_acs)).fit()
+    plot_nl_fit(hw_grid, ns_work, f"Natural Spline, df={i}", clean_acs['hrs_work'], 'Hours worked')
+
+```
+
+```{python}
+cv_mse = []
+for i in range(3,10):
+    # obtains cross-validated error for spline functions at each degree of freedom
+    Xns = MS([ns('hrs_work',df=i)]).fit_transform(clean_acs)
+    ns_cv = cross_validate(ols, Xns, y, cv=cv, scoring=['r2', 'neg_mean_squared_error'])
+    cv_mse.append(-np.mean(ns_cv['test_neg_mean_squared_error']))
+cv_mse
+```
+
+The best cross-validation error is achieved when a cubic funcion is used with no knots, and is around 2.958 million. This, in addition to the relatively high cross-validation errors obtained through non-linear transformations of hours worked all indicate that a regular least-squares regression function may actually sufficiently describe the relationship between income and hours worked. 
+
+
+I can balance model complexity (the roughness of splines) with variance, a key concern in model regularization, throguh smoothing splines.
+
+## Smoothing splines
+```{python}
+# smoothing spline function with default lambda value
+X_work = np.asarray(clean_acs.hrs_work).reshape((-1,1))
+gam = LinearGAM(s_gam(0, lam=0.6))
+gam.fit(X_work, y)
+
+```
+
+```{python}
+# plotting an array of different spline functions to underlying data
+fig, ax = subplots(figsize=(8,8))
+ax.scatter(clean_acs.hrs_work, y, facecolor='gray', alpha=0.5)
+for lam in np.logspace(-2, 6, 5):
+    gam = LinearGAM(s_gam(0, lam=lam)).fit(X_work, y)
+    ax.plot(hw_grid,
+            gam.predict(hw_grid),
+            label='{:.1e}'.format(lam),
+            linewidth=3)
+ax.set_xlabel('Hours worked', fontsize=20)
+ax.set_ylabel('Income', fontsize=20);
+ax.legend(title='$\lambda$');
+
+
+```
+
+```{python}
+gam_opt = gam.gridsearch(X_work, y)
+ax.plot(hw_grid,
+        gam_opt.predict(hw_grid),
+        label='Grid search',
+        linewidth=4)
+ax.legend()
+fig
+
+```
+
+
+
+## Generalized Additatve Models
+With the non-linear models, I can now fit multivariate regression models with more flexibility than least-squares regression, given that i expect different relationships between the outcome and each variable I include when the others are held constant. Here, I use the natural spline of age, hours worked, and the qualitative variable of gender.
+
+```{python}
+# combining a spline function of hours worked and qualitative variable of gender
+gam_gam = LinearGAM(s_gam(0)+f_gam(1, lam = 0))
+x_gam = np.column_stack([X_train['hrs_work'],X_train['male']])
+x_gam_test = np.column_stack([X_test['hrs_work'],X_test['male']])
+gam_m = gam_gam.fit(x_gam, y_train)
+# finding predictive accuracy of this model on unseen data
+gam_sum_w, gam_sum_l = acc_pred_table(gam_m, "GAM Results", x_gam_test, y_test)
+markdown_format(gam_sum_l, "GAM Results")
+```
+
+The validated mean-squared error for the generalized additative model for male gender and hours worked is worse than that originally achieved through least squares regression. 
+
+# Exercise 2
+```{python}
+# importing College data
+col_df = load_data('College')
+# transforming one string variable into dummy variable
+col_df['Private'] = pd.get_dummies(col_df['Private'], drop_first = True, dtype = float)
+# dropping top 25 perc as this cannot be considered as a predictor of top 10 perc
+col_df = col_df.drop('Top25perc', axis = 1)
+# splitting dataset for training and validation
+col_train, col_test = train_test_split(col_df, test_size = 0.3, random_state = 0)
+```
+
+```{python}
+# performing forward stepwise selection to settle on final subset of coefficients
+col_des = MS(col_train.columns.drop('Top10perc')).fit(col_train)
+X_train = col_des.transform(col_train)
+strategy = Stepwise.first_peak(col_des, direction = 'forward', max_terms = len(col_des.terms))
+top_mse = sklearn_selected(OLS, strategy, scoring = neg_Cp)
+top_mse.fit(col_train.drop('Top10perc',axis=1),col_train['Top10perc'])
+top_mse.selected_state_
+
+```
+
+
+
+The best model occurs when we use the subset `Expend`, `Grad.Rate`, and `PhD` to predict `Top10perc`. 
+
+```{python}
+# fitting a GAM with the smooth spline functions for expenditures, graduation rate and rate of faculty with PhDs. 
+gam = LinearGAM(s_gam(0)+s_gam(1)+s_gam(2))
+x_gam = np.column_stack([
+    col_train['Expend'],
+    col_train['Grad.Rate'],
+    col_train['PhD']
+
+])
+# for each coefficient, plots partial dependence and fit of the specified base function
+gam_m = gam.fit(x_gam, col_train['Top10perc'])
+for i in top_mse.selected_state_:
+    fig,ax = subplots(figsize = (8,8))
+    ax = plot_gam(gam_m, top_mse.selected_state_.index(i))
+    ax.set_xlabel(i)
+    ax.set_ylabel('Effect on Top10Perc')
+
+
+```
+
+```{python}
+work_term = gam.terms[0]
+
+
+```
+
+Expenditures per student and graduation rate seem to share non-linear relationships with `Top10perc`, while the rate of faculty with PhDs shares an overall linear association with `Top10perc`. 
+
+```{python}
+from sklearn.metrics import r2_score,mean_squared_error
+# using the GAM model to predict top 10 perc values in unseen data
+y_test = col_test['Top10perc']
+X_test = np.column_stack([
+    col_test['Expend'],
+    col_test['Grad.Rate'],
+    col_test['PhD']
+])
+
+y_pred = gam_m.predict(X_test)
+r2_score(y_test, y_pred)
+
+
+```
+
+The model explains nearly 60% of variance of `Top10perc` in unseen data, which is quite moderate. 
+
+```{python}
+# trying a different rendition, this time using a linear regression model for the rate of faculty members with PhD
+gam_2 = LinearGAM(s_gam(0)+s_gam(1)+l_gam(2))
+gam_2 = gam_2.fit(x_gam, col_train['Top10perc'])
+y_pred = gam_2.predict(X_test)
+r2_score(y_test, y_pred)
+
+```
+
+```{python}
+# defining the smoothness of splines to see whether this improves generalizability to unseen data
+gam_3 = LinearGAM(s_gam(0, n_splines = 7)+
+s_gam(1, n_splines = 7)+s_gam(2))
+gam_3 = gam_3.fit(x_gam, col_train['Top10perc'])
+y_pred = gam_3.predict(X_test)
+r2_score(y_test, y_pred)
+
+```
+
+```{python}
+# plotting the results of this customized GAM model for each coefficient
+for i in top_mse.selected_state_:
+    fig,ax = subplots(figsize = (8,8))
+    ax = plot_gam(gam_3, top_mse.selected_state_.index(i))
+    ax.set_xlabel(i)
+    ax.set_ylabel('Effect on Top10Perc')
+
+
+```
+
+Smoothing the base functions for Expend and Grad.Rate improved the predictive accuracy of the model, while smoothing the PhD variable actually did not help (either making it linear or changing the number of splines). The complexity in the splines may thus represent meaningful relationships while variation in splines seen in the original partial dependence plot for Grad.Rate, for example, may have reflected extreme behavior at ends or other noise in the data, as the model performs better when these complexities are smoothed out. With the third attempt for the GAM model, the r-squared on new data is 62%, compared to 60% for the initial, default GAM model. 
+
+```{python}
+# comparing the results of the three models using ANOVA
+anova_gam(gam_m, gam_2, gam_3)
+
+
+```
+
