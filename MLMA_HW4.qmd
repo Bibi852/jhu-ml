@@ -1,7 +1,17 @@
 ---
 title: "Machine Learning and Applications Homework 4"
 author: "Abigail Lee"
-format: html
+date: "March 18th, 2025"
+toc: true
+number-sections: true
+format: 
+    html:
+        grid:
+            margin-width: 350px
+        code-tools: true
+        self-contained: true
+execute:
+    warning: false
 jupyter: python3
 ---
 
@@ -28,12 +38,14 @@ Report the results of your investigation. Include well-formatted, easy to read t
 figures that summarize the predictive accuracy based on different choices about tuning parameters and variable inclusion. In well-written paragraphs, briefly summarize the methods
 you use and explain your results.
 
+
 Your boss at your new data science job has assigned this to you for the purpose of assessing
 whether you will be on the ML team. Prepare your demonstration to that level of professionalism.
-
-## Importing libraries and dataset
+## Preparation
+### Importing libraries and dataset
 ```{python}
 #| label: import-packages
+#| code-fold: true
 import numpy as np
 import pandas as pd
 from matplotlib.pyplot import subplots
@@ -57,15 +69,27 @@ from ISLP.models import \
 from l0bnb import fit_path
 from IPython.display import display, Markdown
 import seaborn as sns
-```
+from statsmodels.stats.anova import anova_lm
 
-```{python}
-#| label: import-data
+from pygam import (s as s_gam,
+                   l as l_gam,
+                   f as f_gam,
+                   LinearGAM,
+                   LogisticGAM)
+
+from ISLP.transforms import (BSpline,
+                             NaturalSpline)
+from ISLP.models import bs, ns, poly
+from ISLP.pygam import (approx_lam,
+                        degrees_of_freedom,
+                        plot as plot_gam,
+                        anova as anova_gam)
+
 # importing ACS 12 Data
 acs = pd.read_csv('ex1.csv')
 ```
 
-## Exploring ACS data
+### [ACS Data Dictionary](https://www.openintro.org/data/index.php?data=acs12)
 
 | Variable Name | Variable Type | Definition                                       | Values                                                   |
 |---------------|---------------|--------------------------------------------------|----------------------------------------------------------|
@@ -82,42 +106,120 @@ acs = pd.read_csv('ex1.csv')
 | birth_qrtr    | str           | The quarter of the year that the person was born | jul thru sep, oct thru dec, april thru jun, jan thru mar |
 | edu           | str           | Education level                                  | hs or lower, college, grad                               |
 
+### Exploring ACS Data Visually
+::: {.callout-note appearance="simple"}
+Boxplots are used to explore the distribution of annual income across categorical variables such as gender or education, and a scatterplot matrix helps visualize annual income by continuous features such as hours worked per week or age. 
+:::
 
+::: panel-tabset
+
+##### Annual Income by Race
 ```{python}
 #| label: boxplot-categorical
-#| fig-cap: Annual Income by Categorical Variables
+#| code-fold: true
 # plotting annual income values by each categorical variable using boxplots
-def boxplot_fun(df):
-    # get names of categorical attributes
-    cat_names = df.select_dtypes(include=['object']).columns
-    for i in cat_names:
-        plt.figure(figsize = (8,8))
+def boxplot_fun(x, xlabel):
+    
+        plt.figure(figsize = (5,5))
         # plot boxplot
-        sns.boxplot(x=df[i],y=acs['income'])
-        plt.title(f'Boxplot of Income by {i.capitalize()}')
-        plt.xlabel(i.capitalize())
+        sns.boxplot(x=acs[x],y=acs['income'])
+        plt.title(f'Boxplot of Income by {xlabel}')
+        plt.xlabel(xlabel)
         plt.ylabel('Annual Income')
         plt.show()
 
-boxplot_fun(acs.drop('income', axis = 1))
+boxplot_fun('race','Race')
+```
+
+##### Annual Income By Gender
+```{python}
+#| label: boxplot-gender
+#| code-fold: true
+boxplot_fun('gender', 'Gender')
 
 ```
 
-
+##### Annual Income By Disability
 ```{python}
-#| label: acs-pariplot
+#| label: boxplot-dis
+#| code-fold: true
+boxplot_fun('disability', 'Disability')
+
+```
+
+##### Annual Income By Education
+```{python}
+#| label: boxplot-edu 
+#| code-fold: true
+boxplot_fun('edu', 'Education Level')
+
+```
+
+##### Annual Income by Language
+```{python}
+#| label: boxplot-lang
+#| code-fold: true
+boxplot_fun('lang', 'Language Spoken at Home')
+
+```
+
+##### Annual Income By Marital Status
+```{python}
+#| label: boxplot-mar
+#| code-fold: true
+boxplot_fun('married', 'Marital Status')
+
+```
+
+##### Annual Income By Birth Quarter
+```{python}
+#| label: boxplot-bir
+#| code-fold: true
+boxplot_fun('birth_qrtr', 'Birth Quarter')
+
+```
+
+##### Annual Income By Citizenship
+```{python}
+#| label: boxplot-cit
+#| code-fold: true
+boxplot_fun('citizen', 'U.S. Citizenship')
+
+```
+
+##### Scatterplot Matrix of Numeric Variables
+```{python}
+#| label: acs-pairplot
 #| fig-cap: Annual Income by Numeric Variables
+#| message: false
+#| code-fold: true
+
+plt.figure(figsize = (8,5))
 closeup = sns.pairplot(acs, x_vars = ['age', 'hrs_work', 'time_to_work'],
 y_vars = ['income'])
 
 ```
 
-For the first, simplest OLS regression, I want to explore the relationship between gender, hours worked, and income. 
+:::
+
+Based on these visualizations, I am interested in the relationship between gender, hours worked per week, and annual income. 
 
 Before going any further, however, I will transform the categorical features in this dataset to dummy variables and convert the outcome `income` into income in the $1000s for easier interpretation of model results. Additionally, I included functions to create and display predictive accuracy summary tables for each model. 
 
+::: column-margin
+##### [Mean Squared Error Equation](http://www.deepnlp.org/equation/mean-squared-error-mse)
+$$\text{MSE} = \frac{1}{n} \sum^{n}_{i=1} (y_{i} - \hat{y}_{i}) ^ {2}$$
+
+##### Root Mean Squared Error
+$$\text{RMSE} = \sqrt{\frac{1}{n} \sum^{n}_{i=1} (y_{i} - \hat{y}_{i}) ^ {2}}$$
+
+##### [R-squared equation](https://permetrics.readthedocs.io/en/stable/pages/regression/R2.html)
+$$R^2 = 1 - \frac{\sum_{i=1}^{N} (y_i - \hat{y}_i)^2}{\sum_{i=1}^{N} (y_i - \bar{y})^2}$$
+:::
+
 ```{python}
 #| label: predictive-metrics-functions
+#| code-fold: true
 
 # Mean-squared error
 def mse_fun(X, y, model):
@@ -138,10 +240,13 @@ def rsquare(X, y, model):
 
 # creating a dataframe with all the predictive metrics
 def acc_pred_table(model, model_name, X, y):
-    
+    # r-squared value
     r2 = rsquare(X, y, model)
+    # MSE value
     mse = mse_fun(X, y, model)
+    # RMSE value
     rmse = rmse_fun(mse)
+    # combine into dataframe
     acc_table_wide = pd.DataFrame({'Model':[model_name], 'MSE':[mse], 'RMSE':[rmse],
      'R^2':[r2]})
      # long and wide format to combine later
@@ -150,122 +255,6 @@ def acc_pred_table(model, model_name, X, y):
     value_name = 'Value')
     return acc_table_wide, acc_table_long
 
-# transforming to markdown format for QMD file
-def markdown_format(summary_table, title, include_ind = False):
-    markdown = f"::: {{.tbl-cap}}\n**{title}**\n:::\n\n"
-    if include_ind == False:
-        display(Markdown(markdown + summary_table.to_markdown(index = False)))
-    else:
-        display(Markdown(markdown + summary_table.to_markdown())) 
-```
-
-
-## Ordinary Least Squares Regression and Predictive Accuracy
-
-### Simple OLS Model
-```{python}
-#| label: clean-acs-data
-# get dummy variables for categorical features
-clean_acs = pd.get_dummies(acs, columns = acs.columns.drop(['income', 'age', 'hrs_work', 'time_to_work']), drop_first = True, dtype = float)
-# renaming variables
-clean_acs = clean_acs.rename(columns={
-    'gender_male':'male',
-    'citizen_yes':'citizen',
-    'married_yes':'married',
-    'disability_yes':'disability',
-    'edu_grad': 'grad',
-    'edu_hs or lower':'hs'
-})
-# dividing annual income by $1000
-clean_acs['income'] = clean_acs['income']/1000
-# setting outcome variable
-y = clean_acs['income']
-```
-
-```{python}
-#| label: initial-ols
-# fitting predictors of male gender and hours of work per week
-X = MS(['male', 'hrs_work']).fit_transform(clean_acs)
-# regressing annual income on these predictors
-ols_model = sm.OLS(y, X)
-# fitting model
-ols_fit = ols_model.fit()
-# coefficients
-ols_coef_summary = summarize(ols_fit)
-
-```
-
-```{python}
-#| label: OLS-summary
-#| echo: false
-
-ols_sum_w, ols_sum_l = acc_pred_table(ols_fit, "OLS regression", X, y)
-```
-
-OLS regression is a well-established form of supervised learning that models the relationship between a dependent variable and one or more independent variables. OLS regression takes the form of a linear equation, where the y-intercept represents the baseline outcome and a slope coefficient is the change in the outcome associated with a one-unit increase in a given dependent variable when all other predictors are held constant. OLS achieves the best fit to the underlying relationship between features by minimizing the sum of squared errors (the distance between observed and fitted values) with optimal values for the intercept and slope coefficients.  
-```{python}
-#| label: coef-summary-table
-#| echo: false
-print(markdown_format(ols_coef_summary, "OLS Coefficients", include_ind = True))
-```
-
-From the results of this first OLS model, there seems to be a significant relationship between gender, hours worked per week, and annual income. Specifically, the y-intercept tells us that for women working 0 hours per week, the average annual earnings are $-19,200. This is a negative value and thus not practically interpretable, however the coefficients for `male` and `hrs_work` tell us about the variation in annual income that can be explained by each feature individually. Between two people who work the same amount each week, the man will make $17,900 more on average compared to the woman. A person who works one more hour per week will make $1395.4 more annually than another person of the same gender. Together, gender and hours worked per week explain approximately 14% of the variance in annual income.  
-
-```{python}
-#| label: pred-summary-table
-#| echo: false
-markdown_format(ols_sum_l, 'OLS Predictive Accuracy Summary')
-```
-
-The average squared difference between the model's predictions of income and the actual values of income in the `acs12` dataset is $2.9 million. In other words, the model's predictions of annual income deviate from the actual values by approximately $54,000 on average. However, this may not be a honest representation of the model's predictive accuracy as the model was developed specifically to optimize results for the data it was fitted on. 
-
-The coefficients and weights have been altered to reflect any trends or variation in the training dataset, including those attributed to random noise not actually relevant to the underlying relationship between the outcome and predictors. To obtain a more accurate picture of this model's predictive performance, we would thus need to apply it to new, unseen data, and compare the differences between the model's fitted values and the observed ones.  
-
-### Validation Set Approach
-```{python}
-# splitting data into training and test sets
-X_train, X_test, y_train, y_test = train_test_split(X, y, test_size = 0.3, random_state = 42)
-# fitting OLS model again, on training subset
-model = sm.OLS(y_train, X_train)
-results = model.fit()
-vset_coef_summary = summarize(results)
-vset_sum_w, vset_sum_l = acc_pred_table(results, "Validation Set OLS", X_test, y_test)
-```
-
-```{python}
-#| label: vset-coef-summary-table
-#| echo: false
-markdown_format(vset_coef_summary, "OLS Coefficients on Training Subset", include_ind = True)
-```
-
-The validation set approach fits a model on only a subset of the data and uses the other subset to estimate model performance on unseen observations. Trained again on 70% of the data, the OLS model still indicates a significant positive relationship between male gender, work hours and annual income, although the magnitude of coefficients has changed slightly. 
-```{python}
-#| label: vset-pred-table
-#| echo: false
-markdown_format(vset_sum_l, "OLS Model Accuracy on Unseen Data")
-```
-
-The mean-squared error on unseen data is $3.1 million, meaning that on average, the predicted annual income value for a new observation deviates from the actual value by around $55,890, a larger gap than what was found when predicting income for already seen data. Moreover, the model can only explain 5% of variance in annual income in unseen observations, compared to 14% for the data it was fitted on. This may suggest that the model may not be a good fit and that the variance in the outcome attributed to gender and hours worked originally may have been a result of overfitting, or random noise the model caught in the training data. 
-
-### Cross-validation Approach
-
-The validation set approach only tells us about how well the model performs when predicting annual income in this specific set of observations. The resulting test error score at one instance is highly variable and may not give the best representation of the model's predictive performance on average. Cross-validation helps address this concern for variance by averaging test error over multiple random splits of training and test data. In k-fold cross-validation, we split the initial dataset into k folds, where k-1 folds are used to train a model and results are validated using the remaining fold. The final estimate of test error is obtained by repeating this process k times and aggregating the test error at each fold. 
-```{python}
-# setting error value for cross validation
-cv_error = np.zeros(5)
-# transforming sm.OLS to sklearn model to use in built-in cross validation function
-acs_mod = sklearn_sm(sm.OLS)
-# 10-fold cross-validation approach
-# shuffles data before splitting
-cv = KFold(n_splits = 10, shuffle = True, random_state = 0)
-# repeating sm.OLS function with income and X variables using the 10-fold cross-validator
-acs_cv = cross_validate(acs_mod, X, y, cv = cv, scoring=['r2', 'neg_mean_squared_error'])
-# includes MSE and R2 as scoring metrics
-
-
-```
-
-```{python}
 # similar predictive accuracy summary table but for cross-validated results
 def cv_summary_table(cv, model_name):
     # aggregating r-squared over k folds
@@ -283,17 +272,122 @@ def cv_summary_table(cv, model_name):
     # returns both dataframes
     return cv_sum_w, cv_sum_l
 
-ols_cv_w, ols_cv_l = cv_summary_table(acs_cv, "Cross-Validated OLS")
+# transforming to markdown format for QMD file
+# condition for including index for cleaner formatting of long formatted dataframes
+def markdown_format(summary_table, title, include_ind = False):
+    markdown = f"::: {{.tbl-cap}}\n**{title}**\n:::\n\n"
+    if include_ind == False:
+        display(Markdown(markdown + summary_table.to_markdown(index = False)))
+    else:
+        display(Markdown(markdown + summary_table.to_markdown())) 
+```
+
+#### Cleaning ACS Dataset
+```{python}
+#| label: clean-acs-data
+#| code-fold: true
+# get dummy variables for categorical features
+clean_acs = pd.get_dummies(acs, columns = acs.columns.drop(['income', 'age', 'hrs_work', 'time_to_work']), drop_first = True, dtype = float)
+# renaming variables
+clean_acs = clean_acs.rename(columns={
+    'gender_male':'male',
+    'citizen_yes':'citizen',
+    'married_yes':'married',
+    'disability_yes':'disability',
+    'edu_grad': 'grad',
+    'edu_hs or lower':'hs'
+})
+# dividing annual income by $1000
+clean_acs['income'] = clean_acs['income']/1000
+# setting outcome variable
+y = clean_acs['income']
+```
+
+## Ordinary Least Squares Regression and Predictive Accuracy
+### Simple OLS Model
+```{python}
+#| label: initial-ols
+# fitting and transforming predictors of male gender and hours of work per week
+X = MS(['male', 'hrs_work']).fit_transform(clean_acs)
+# regressing annual income on these predictors
+ols_model = sm.OLS(y, X).fit()
+# summary of coefficients
+ols_coef_summary = summarize(ols_model)
+# predictive accuracy summary
+ols_sum_w, ols_sum_l = acc_pred_table(ols_model, "OLS regression", X, y)
 
 ```
 
+Ordinary Least Squares (OLS) regression is a fundamental supervised learning method that models the relationship between a dependent variable and one or more independent variables. It assumes a linear relationship, where the intercept represents the baseline outcome, and each slope coefficient quantifies the expected change in the outcome for a one-unit increase in a given predictor, holding all others constant. OLS modifies these two parameters to reach the lowest sum of squared errors (SSE), or the total squared difference between observed and fitted values, thus ensuring the best possible linear fit to the data.
 ```{python}
-#| label: cv-table
+#| label: OLS-summary
 #| echo: false
+
+print(markdown_format(ols_coef_summary, "OLS Coefficients", include_ind = True))
+markdown_format(ols_sum_l, 'OLS Predictive Accuracy Summary')
+```
+
+The results of the initial OLS model suggest a statistically significant relationship between gender, hours worked per week, and annual income. The intercept of -19,200 is the predicted annual income for  women working zero hours per week, and this negative value is not practically meaningful. However, the coefficients for `male` and `hrs_work` provide more interpretable insights. For one, among individuals working the same number of hours per week, men earn $17,900 more on average than women. Moreover, each additional hour worked per week is associated with an annual income increase of $1,395.40, assuming gender remains constant. Together, these two predictors account for approximately 14% of the variance in annual income, indicating that while gender and work hours do share a meaningful relationship with annual earnings,  other unobserved factors also likely play a significant role.
+
+The  mean squared error (MSE) between the model’s predicted and actual income values in the `acs12` dataset is $2.9 million. This translates to a Root Mean Squared Error (RMSE) of approximately $54,000, which is how far the model's predictions deviate from actual annual incomes on average.  Yet, as the model was specifically trained to minimize error on this dataset, these estimates may thus be an overstatement of its predictive accuracy. 
+
+Since the regression coefficients were optimized to fit patterns within the training data, they could also have captured random noise that does not reflect the true relationship between income and its predictors. To obtain a more reliable assessment of the model’s predictive performance, we need to evaluate it on new, unseen data and measure how well its predictions generalize beyond the training set.
+
+### Validation Set Approach
+```{python}
+#| label: train-test-split
+
+# splitting data into training and test sets
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size = 0.3, random_state = 42)
+# fitting OLS model again, on training subset
+vs_model = sm.OLS(y_train, X_train).fit()
+# obtain coefficient summary
+vset_coef_summary = summarize(vs_model)
+# obtain predictive accuracy metrics for test set
+vset_sum_w, vset_sum_l = acc_pred_table(vs_model, "Validation Set OLS", X_test, y_test)
+```
+
+```{python}
+#| label: vset-summary-table
+#| echo: false
+markdown_format(vset_coef_summary, "OLS Coefficients on Training Subset", include_ind = True)
+markdown_format(vset_sum_l, "OLS Model Accuracy on Unseen Data")
+```
+
+The validation set approach assesses a model’s predictive performance by training it on a subset of the data and evaluating it on the remaining observations. When trained on 70% of the data, the OLS model still suggests a significant positive relationship between male gender, work hours per week, and annual income, although the magnitude of the coefficients has changed slightly.
+
+The validated MSE is $3.1 million, corresponding to a RMSE of approximately $56,000. This indicates that, on average, the model’s income predictions deviate from actual values by $56,000, a larger gap than when predicting incomes from the training set. Additionally, the model explains only 5% of the variance in annual income for unseen data, compared to 14% in the training set. This suggests that the relationship between gender, work hours, and income observed in the training data may have been partially driven by overfitting or random noise, rather than a truly generalizable pattern.
+
+### Cross-validation Approach
+
+The validation set approach tells us how well a model predicts outcomes for a specific data split but does not necessarily reflect its overall predictive accuracy. A single test error estimate can be highly variable, and is thus  an unreliable measure of model performance. Cross-validation is a way to reduce variability in performance assessment by aggregating test error across multiple randomized splits of the data.
+
+In k-fold cross-validation, the dataset is divided into k equal-sized folds. The model is trained on $k-1$ folds and validated on the remaining fold. This process is repeated k times, and the folds may or may not be reshuffled with each split. Metrics like MSE or R-squared are averaged across all k iterations, providing a more stable and generalizable measure of model performance.
+```{python}
+#| label: cv-code
+# transforming sm.OLS to sklearn compatible
+acs_mod = sklearn_sm(sm.OLS)
+# 10-fold cross-validation approach
+# shuffles data before splitting and sets random state for reproducibility
+cv = KFold(n_splits = 10, shuffle = True, random_state = 0)
+# perform 10-fold CV with transformed OLS model, fit on X and y variables
+acs_cv = cross_validate(acs_mod, X, y, cv = cv, scoring=['r2', 'neg_mean_squared_error'])
+# includes MSE and R2 as scoring metrics
+# return predictive accuracy metrics
+ols_cv_w, ols_cv_l = cv_summary_table(acs_cv, "Cross-Validated OLS")
+# prints to markdown
 markdown_format(ols_cv_l, "Cross-Validated Results")
 ```
 
 The aggregated test error of this model over 10 folds is $2.932 million, which is lower than what was found with the validation set approach. As mentioned, test estimates obtained for a single set of observations is highly volatile, as the mean r-squared value aggregated through cross-validation is 12%, which is also significantly closer to the original r-squared of 14%. Based on these cross-validated results, it seems like this model based on gender and hours worked can predict annual income for new observations with an average error margin of $54,200. 
+
+```{python}
+#| label: wide-summary
+#| code-fold: true
+ols_validation_summary = pd.concat([ols_sum_w, vset_sum_w, ols_cv_w])
+markdown_format(ols_validation_summary, "Comparison of Predictive Metrics From Full, Validation Set and Cross-Validated OLS", include_ind = True)
+
+```
 
 ## Model Regularization Methods
 
@@ -664,32 +758,6 @@ The mean squared-error achieved with the model with 6 principal components is 2.
 ## Non-linear transformations
 Finally, it may be the case that the OLS regression simply does not capture the relationship between OLS and important predictors such as age, gender, or hours worked because the underlying relationship is not linear, or varies across the range of observations, two aspects which are strictly assumed in least-squares regression. Nonlinear transformations like polynomial regression, stepwise, natural and smooth splines offer ways to improve the model fit for non-linear relationships, again with considerations for the bias-variance trade-off.
 
-```{python}
-# importing libraries from Chapter 7
-import numpy as np, pandas as pd
-from matplotlib.pyplot import subplots
-import statsmodels.api as sm
-from ISLP import load_data
-from ISLP.models import (summarize,
-                         poly,
-                         ModelSpec as MS)
-from statsmodels.stats.anova import anova_lm
-
-from pygam import (s as s_gam,
-                   l as l_gam,
-                   f as f_gam,
-                   LinearGAM,
-                   LogisticGAM)
-
-from ISLP.transforms import (BSpline,
-                             NaturalSpline)
-from ISLP.models import bs, ns
-from ISLP.pygam import (approx_lam,
-                        degrees_of_freedom,
-                        plot as plot_gam,
-                        anova as anova_gam)
-
-```
 
 These non-linear transformations can be freely combined together to create a multivariate regression model, or a generalized additative model that informs us about the partial dependence of the outcome on each transformation of each predictor. 
 
