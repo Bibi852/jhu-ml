@@ -1,9 +1,10 @@
 ---
 title: "Machine Learning and Applications Homework 4"
 author: "Abigail Lee"
-date: "March 18th, 2025"
+date: 03/21/2025
 toc: true
 number-sections: true
+reference-location: margin
 format: 
     html:
         grid:
@@ -323,7 +324,7 @@ ols_sum_w, ols_sum_l = acc_pred_table(ols_model, "OLS regression", X, y)
 Ordinary Least Squares (OLS) regression is a fundamental supervised learning method that models the relationship between a dependent variable and one or more independent variables. It assumes a linear relationship, where the intercept represents the baseline outcome, and each slope coefficient quantifies the expected change in the outcome for a one-unit increase in a given predictor, holding all others constant. OLS modifies these two parameters to reach the lowest sum of squared errors (SSE), or the total squared difference between observed and fitted values, thus ensuring the best possible linear fit to the data.
 ```{python}
 #| label: OLS-summary
-#| echo: false
+#| code-fold: true
 
 print(markdown_format(ols_coef_summary, "OLS Coefficients", include_ind = True))
 markdown_format(ols_sum_l, 'OLS Predictive Accuracy Summary')
@@ -351,7 +352,7 @@ vset_sum_w, vset_sum_l = acc_pred_table(vs_model, "Validation Set OLS", X_test, 
 
 ```{python}
 #| label: vset-summary-table
-#| echo: false
+#| code-fold: true
 markdown_format(vset_coef_summary, "OLS Coefficients on Training Subset", include_ind = True)
 markdown_format(vset_sum_l, "OLS Model Accuracy on Unseen Data")
 ```
@@ -399,6 +400,7 @@ Tools like validation or cross-validation strengthen the statistical power of OL
 Intuitively, one may assume that simply including all information available would yield the most accurate model. However, this is often not the case; especially when some predictors have little to no relationship with the outcome variable. Unnecessary complexity from additional coefficients can weaken predictive performance on new data by increasing the model's sensitivity to random noise rather than meaningful patterns. 
 
 Conversely, models with too few predictors may fail to capture enough variation in the outcome, leading to high prediction error on both training and test data. Subset selection optimizes the balance  between model complexity and predictive performance by systematically comparing different combinations of features.
+
 ::: {.callout-note appearance="simple"}
 When choosing a feature subset, the selection process cannot be exposed to test data, as this would lead to an overly optimistic evaluation of the model's predictive power in the final estimates. 
 :::
@@ -424,6 +426,7 @@ At each subset size, the best-performing model is selected based on criterion su
 
 ```{python}
 #| label: best-subset-prep
+#| message: false
 ## my expansion of the l0bnb code is based on the code documentation for l0bnb and the fit_path() function included in the references 
 
 # turning training and test sets into arrays
@@ -518,7 +521,12 @@ acs_Cp.fit(X_train, y_train)
 acs_Cp.selected_state_
 ```
 
-When Cp, or AIC, an estimate of test error that penalizes larger values of p, is used to compare the predictive power of models, both forward and backwards selection identifies age, disability, work hours, time to work, gender, and education level as the optimal subset of features for predicting annual income.
+When C~p~, an estimate of test error that penalizes larger $p$, is used to compare the predictive power of models, both forward and backwards selection identifies age, disability, work hours, time to work, gender, and education level as the optimal subset of features for predicting annual income.
+
+::: column-margin
+##### C~p~ Estimate
+$C_p = \frac{1}{n} \left( \text{RSS} + 2p \hat{\sigma}^2 \right)$
+:::
 
 ```{python}
 #| label: evaluate-stepwise
@@ -536,23 +544,36 @@ The validated error achieved with this subset is 2.582 million, which is slightl
 
 ```{python}
 #| label: subset-pred
-#| echo: false
+#| code-fold: true
 subset_select_df = pd.concat([best_sum_w, forward_sum_w])
 markdown_format(subset_select_df, "Best/Stepwise Selection Regression Results")
 
 ```
 
-### Ridge Regression
+### Ridge and Lasso Regression
 The primary goal of regularization methods is to improve a model’s predictive accuracy on new data by balancing model accuracy and complexity. Both ridge and lasso regression achieve this by introducing a tuning parameter ($\lambda$) that optimizes the bias-variance trade-off.  
 
 As previously described, OLS regression estimates model parameters by minimizing the sum of squared residuals (bias). However, ridge and lasso regression extend this approach by adding a penalty term that discourages large coefficient values, thereby reducing model sensitivity to small fluctuations in predictor variables. This penalty is defined as the sum of squared coefficients for ridge regression and the sum of absolute coefficients in lasso regression.  
+
+::: column-margin
+
+##### [Ridge (L2) Regression](https://blmoistawinde.github.io/ml_equations_latex/#l2-regularization)
+$$\text{Loss} = \text{Error}(Y - \widehat{Y}) +  \lambda \sum_1^n w_i^{2}$$
+
+##### [Lasso (L1) Regression](https://blmoistawinde.github.io/ml_equations_latex/#l1-regularization)
+
+$$Loss = Error(Y - \widehat{Y}) + \lambda \sum_1^n |w_i|$$
+
+:::
 
 By penalizing large slopes, regularization reduces variance but increases bias, helping to prevent overfitting. The optimal model is found by selecting a $\lambda$ that significantly reduces variance while only slightly increasing bias, leading to the lowest MSE[^1]. 
 
 While ridge and lasso regression share similar objectives, the main difference between the two is in their transformations of coefficient values. Lasso regression can shrink some coefficients to exactly zero, thus performing variable selection by excluding unimportant predictors[^2]. Conversely, ridge regression can only shrink coefficients proportionally, so that all predictors will remain in the model but with reduced influence.  
 
 Before applying ridge or lasso regression, standardizing predictor variables is essential. Without standardization, the penalty term would disproportionately affect variables with larger scales, leading to incorrect coefficient shrinkage and a biased model.
+
 [^1]: [This video](https://www.youtube.com/watch?v=Xm2C_gTAl8c) by StatQuest on Youtube explained to me the mechanics of lasso/ridge regression through visual examples.
+
 [^2]: I referenced Statquest's introduction to [lasso](https://www.youtube.com/watch?v=NGf0voTMlcs) and [ridge](https://www.youtube.com/watch?v=Q81RR3yKn30&t=6s) regression to more clearly understand these differences in how the sum of coefficients is calculated. 
 
 The optimal $\lambda$ value for either ridge or lasso regression can be found using hyperparameter tuning and cross-validation. After the best $\lambda$ is specified by hyperparameter tuning with the training data, the resulting model can be evaluated for its performance on unseen data. 
@@ -681,7 +702,7 @@ def pred_grid(X, name):
 
 # plotting non-linear transformations
 # taken from Chapter 7 lab
-def plot_nl_fit(df, basis, title, x, xlab):
+def plot_nl_fit(df, basis, title, x, xlab, figsiz = 3):
     # performing base transformations for predictor variable
     X = basis.transform(clean_acs)
     Xnew = basis.transform(df)
@@ -691,7 +712,7 @@ def plot_nl_fit(df, basis, title, x, xlab):
     preds = M.get_prediction(Xnew)
     # returning confidence interval for predictions
     bands = preds.conf_int(alpha=0.05)
-    fig, ax = subplots(figsize=(3,3))
+    fig, ax = subplots(figsize=(figsiz,figsiz))
     # plotting bivariate plot
     ax.scatter(x,
                y,
@@ -769,15 +790,15 @@ step_cv_w, step_cv_l = cv_summary_table(step_cv, "Step Function")
 markdown_format(step_cv_l, "Step Function CV")
 ```
 
-## Splines
+### Splines
 Basis and natural splines are ways to achieve smooth yet flexible model fits in a regression model. Because basis splines do not impose constraints at the endpoints of the predictor space, they are potentially unstable at the edges and may have high variance. I try using different degrees of freedom for varying amounts of model complexity with both the basis and natural spline functions. 
 
 ```{python}
-#| label: bs-plot
-#| column: margin
+#| label: bs-plot-fun
+#| code-fold: true
 anova_bs_list = []
 bs_cv_mse = []
-for d in range(3,10):
+def bs_plot(d):
     bs_work = MS([bs('hrs_work',
                 df=d,
                 name='bs(hours worked)')]).fit(clean_acs)
@@ -786,9 +807,69 @@ for d in range(3,10):
     bs_cv = cross_validate(ols, bs_work.transform(clean_acs), y, cv=kfold, scoring=['r2', 'neg_mean_squared_error'])
     bs_cv_mse.append(-np.mean(bs_cv['test_neg_mean_squared_error']))
     plot_nl_fit(hw_grid, bs_work, f"Basis Spline, df={d}",
-                clean_acs['hrs_work'], 'Hours Worked Per Week')
+                clean_acs['hrs_work'], 'Hours Worked Per Week', figsiz = 5)
+
 
 ```
+
+::: panel-tabset
+
+###### Degrees of Freedom: 3
+```{python}
+#| code-fold: true
+bs_plot(3)
+
+```
+
+###### Degrees of Freedom: 4
+```{python}
+#| code-fold: true
+bs_plot(4)
+
+```
+
+###### Degrees of Freedom: 5
+```{python}
+#| code-fold: true
+bs_plot(5)
+
+```
+
+###### Degrees of Freedom: 6
+```{python}
+#| code-fold: true
+bs_plot(6)
+
+```
+
+###### Degrees of Freedom: 7
+```{python}
+#| code-fold: true
+bs_plot(7)
+
+```
+
+###### Degrees of Freedom: 8
+```{python}
+#| code-fold: true
+bs_plot(8)
+
+```
+
+###### Degrees of Freedom: 9
+```{python}
+#| code-fold: true
+bs_plot(9)
+
+```
+
+###### Degrees of Freedom: 10
+```{python}
+#| code-fold: true
+bs_plot(10)
+
+```
+:::
 
 ```{python}
 #| label: anova-bs
@@ -800,20 +881,79 @@ The basis spline function with 3 degrees of freedom seems to result in the great
 
 
 ```{python}
-#| label: ns-plot
-#| column: margin
+#| label: ns-plot-def
+#| code-fold: true
 ns_anova_list = []
 ns_cv_mse = []
-for i in range(3,10):
+def ns_plot(i):
 # comparing the performance of spline function with different degrees of freedom - for more complexity or smoothness
     ns_work = MS([ns('hrs_work',df=i)]).fit(clean_acs)
     m_ns = sm.OLS(y, ns_work.transform(clean_acs)).fit()
     ns_anova_list.append(m_ns)
     ns_cv = cross_validate(ols, ns_work.transform(clean_acs), y, cv=kfold, scoring=['r2', 'neg_mean_squared_error'])
     ns_cv_mse.append(-np.mean(ns_cv['test_neg_mean_squared_error']))
-    plot_nl_fit(hw_grid, ns_work, f"Natural Spline, df={i}", clean_acs['hrs_work'], 'Hours worked per week')
+    plot_nl_fit(hw_grid, ns_work, f"Natural Spline, df={i}", clean_acs['hrs_work'], 'Hours worked per week', figsiz = 5)
 
 ```
+
+::: panel-tabset
+
+###### Degrees of Freedom: 3
+```{python}
+#| code-fold: true
+ns_plot(3)
+
+```
+
+###### Degrees of Freedom: 4
+```{python}
+#| code-fold: true
+ns_plot(4)
+
+```
+
+###### Degrees of Freedom: 5
+```{python}
+#| code-fold: true
+ns_plot(5)
+
+```
+
+###### Degrees of Freedom: 6
+```{python}
+#| code-fold: true
+ns_plot(6)
+
+```
+
+###### Degrees of Freedom: 7
+```{python}
+#| code-fold: true
+ns_plot(7)
+
+```
+
+###### Degrees of Freedom: 8
+```{python}
+#| code-fold: true
+ns_plot(8)
+
+```
+
+###### Degrees of Freedom: 9
+```{python}
+#| code-fold: true
+ns_plot(9)
+
+```
+
+###### Degrees of Freedom: 10
+```{python}
+#| code-fold: true
+ns_plot(10)
+
+```
+:::
 
 ```{python}
 ns_cv_mse
@@ -823,10 +963,13 @@ The best cross-validation error is achieved again with three degrees of freedom 
 
 Smoothing splines are a good way to balance model complexity (the roughness of the splines) with interpretability and generalizability to new data points. 
 
-## Smoothing splines
+### Smoothing splines
 
 
 ```{python}
+#| label: smooth-spline
+#| fig-cap: Plotting optimal lambda parameter
+#| column: margin
 # plotting different smoothing parameters' fit to underlying data
 # lambda ranges from 10^-2 to 10^6
 X_work = np.asarray(clean_acs.hrs_work).reshape((-1,1))
@@ -841,15 +984,17 @@ for lam in np.logspace(-2, 6, 5):
             gam.predict(hw_grid),
             label='{:.1e}'.format(lam),
             linewidth=3)
-ax.set_xlabel('Hours worked per week', fontsize=20)
-ax.set_ylabel('Income', fontsize=20);
+ax.set_xlabel('Hours worked per week', fontsize=8)
+ax.set_ylabel('Income', fontsize=8);
 ax.legend(title='$\lambda$');
 
 
 ```
 
 ```{python}
-# plotting optimal smoothinf parameter found through pygam
+
+#| column: margin
+# plotting optimal smoothing parameter found through pygam
 gam_opt = gam.gridsearch(X_work, y)
 ax.plot(hw_grid,
         gam_opt.predict(hw_grid),
@@ -862,7 +1007,8 @@ fig
 
 The model fit of the smoothing spline using the optimal smoothing parameter is very similar to the third-degree polynomial function, suggesting that this really is the best representation of the underlying relationship between hours worked per week and annual income, so that more work per week is generally associated with greater income with a slight drop-off in returns at the end of the predictor space. 
 
-## Generalized Addititive Models
+### Generalized Additive Model 
+
 To see whether the non-linear transformation of `hrs_work` actually improves predictions of income when combined with the other initial predictor of male gender, I fit a generalized additive model (GAM) using the spline function for `hrs_work` and the qualitative variable of gender. 
 
 ```{python}
@@ -876,7 +1022,7 @@ gam_sum_w, gam_sum_l = acc_pred_table(gam_m, "GAM Results", x_gam_test, y_test)
 markdown_format(gam_sum_l, "GAM Results")
 ```
 
-The validated mean-squared error for the generalized additative model of income by male gender and the spline function of hours worked using the default smoothing parameter is 3.02 million, which represents an improvement over the original validation error.  
+The validated mean-squared error for the generalized additive model of income by male gender and the spline function of hours worked using the default smoothing parameter is 3.03 million, which represents an improvement over the original validation error.  
 
 # Exercise 2
 We’re back to being an analyst in an oﬀice of institutional research at a university.
@@ -935,7 +1081,7 @@ top_mse.selected_state_
 
 The best model results from the subset `Expend`, `Grad.Rate`, and `PhD`.  
 
-## Generalized Additive Models
+## GAMs
 ```{python}
 #| label: part-plot
 #| code-fold: true
@@ -1012,12 +1158,19 @@ markdown_format(col_sum_l3, "Modified Spline Function Results")
 ```
 
 ```{python}
-#| echo: false
+#| code-fold: true
 new_plot_list = part_dep_iter(gam_3)
 
 ```
 ```{python}
-#| echo: false
+#| code-fold: true
 markdown_format(anova_gam(col_l_gam, gam_3, col_gam_m), "GAM Anova Table")
 
 ```
+
+# References
+[https://blmoistawinde.github.io/ml_equations_latex/#regression-1](https://blmoistawinde.github.io/ml_equations_latex/#regression-1)
+[http://www.deepnlp.org/equation/mean-squared-error-mse](http://www.deepnlp.org/equation/mean-squared-error-mse)
+[https://www.youtube.com/watch?v=Xm2C_gTAl8c](https://www.youtube.com/watch?v=Xm2C_gTAl8c)
+[https://www.youtube.com/watch?v=NGf0voTMlcs](https://www.youtube.com/watch?v=NGf0voTMlcs)
+[https://www.youtube.com/watch?v=Q81RR3yKn30&t=6s](https://www.youtube.com/watch?v=Q81RR3yKn30&t=6s)
